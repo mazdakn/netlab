@@ -1,0 +1,29 @@
+database name = "network"
+table name = "dns"
+
+fields:
+	domain 		VARCHAR
+	noQuery 	INT
+	lastRsponse 	INT
+	average		DOUBLE
+	deviation	DOUBLE
+	firstTimestamp	BIGINT UNSIGNED
+	lastTimestamp	BIGINT UNSIGNED
+
+
+mysql> select * from dns;
++---------------+---------+--------------+---------+-----------+----------------+---------------+
+| domain        | noQuery | lastResponse | average | deviation | firstTimestamp | lastTimestamp |
++---------------+---------+--------------+---------+-----------+----------------+---------------+
+| wikipedia.org |       1 |           13 |      13 |         0 |     1432928555 |    1432928555 |
+| baidu.com     |       1 |           10 |      10 |         0 |     1432928555 |    1432928555 |
+| blogger.com   |       1 |            9 |       9 |         0 |     1432928555 |    1432928555 |
+| msn.com       |       1 |          274 |     274 |         0 |     1432928556 |    1432928556 |
+| live.com      |       1 |          174 |     174 |         0 |     1432928556 |    1432928556 |
+| youtube.com   |       1 |           15 |      15 |         0 |     1432928556 |    1432928556 |
+| yahoo.com     |       1 |           11 |      11 |         0 |     1432928556 |    1432928556 |
+| qq.com        |       1 |          765 |     765 |         0 |     1432928557 |    1432928557 |
+| google.com    |       1 |          139 |     139 |         0 |     1432928572 |    1432928572 |
++---------------+---------+--------------+---------+-----------+----------------+---------------+
+9 rows in set (0.00 sec)
+

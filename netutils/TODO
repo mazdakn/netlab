@@ -1,0 +1,7 @@
+-1 - SIGPIPE
+0 - output
+1 - resolving name and ...
+2 - non blocking read and write
+3 - multiple clients
+4 - UDP
+5 - overall stat
