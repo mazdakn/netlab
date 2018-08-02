@@ -26,23 +26,27 @@ type Flow struct {
     node2   Node
     proto   uint8
     iface   string
+    inboud  bool
 }
 
-func printFlow(flow Flow) {
+type Connections []Flow
+
+func printFlow(conns Connections) {
     var output string
 
-    switch flow.proto {
-    case IP:
-        output = "IP  " + flow.node1.addr + " --> " +  flow.node2.addr
-    case TCP:
-        output = "TCP " + flow.node1.addr + ":" + flow.node1.port + " --> " + flow.node2.addr + ":" + flow.node2.port
-    case UDP:
-        output = "UDP " + flow.node1.addr + ":" + flow.node1.port + " --> " + flow.node2.addr + ":" + flow.node2.port
+    for _, flow := range conns {
+        switch flow.proto {
+        case IP:
+            output = "IP  " + flow.node1.addr + " --> " +  flow.node2.addr
+        case TCP:
+            output = "TCP " + flow.node1.addr + ":" + flow.node1.port + " --> " + flow.node2.addr + ":" + flow.node2.port
+        case UDP:
+            output = "UDP " + flow.node1.addr + ":" + flow.node1.port + " --> " + flow.node2.addr + ":" + flow.node2.port
+        }
+
+        fmt.Println (output)
     }
-
-    fmt.Println (output)
 }
-
 
 func parseIfaces() (map[string]string, error) {
 
@@ -92,8 +96,20 @@ func printInterfaces(interfaces map[string]string) {
     }
 }
 
-func processFlow(flows map[string])
+func foundFlow(conns Connections, flow Flow) (bool) {
 
+    for _, f := range conns {
+        if f.node1 == flow.node1 && f.node2 == flow.node2 {
+            return true
+        }
+
+        if f.node1 == flow.node2 && f.node2 == flow.node1 {
+            return true
+        }
+    }
+
+    return false
+}
 
 func main() {
 
@@ -105,8 +121,7 @@ func main() {
         os.Exit(1)
     }
 
-    connections := make(map[Node]Node)
-    ingress, egress := make([]Flow)
+    var connections Connections
 
 
     /*handler, err := pcap.OpenOffline("wlp2s0", 200, true, pcap.BlockForever)
@@ -119,7 +134,7 @@ func main() {
         os.Exit(1)
     }
 
-    ifaces, err := parseIfaces()
+    _, err := parseIfaces()
     if err != nil {
         fmt.Println(err)
     }
@@ -166,15 +181,12 @@ func main() {
             flow.proto      = UDP
         }
 
-        _, ok1 := connections[flow.node1]
-        _, ok2 := connections[flow.node2]
-
-       if ok1 || ok2 {
+        if foundFlow(connections, flow) {
             continue
-       }
+        }
 
-       connections[flow.node1] = flow.node2
+        connections = append(connections, flow)
     }
 
-    processFlows(connections)
+    printFlow(connections)
 }
