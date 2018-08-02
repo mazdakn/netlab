@@ -2,6 +2,9 @@ package main
 
 import (
     "fmt"
+    "flag"
+    "os"
+    "net"
     "github.com/google/gopacket"
     "github.com/google/gopacket/pcap"
     "github.com/google/gopacket/layers"
@@ -22,6 +25,7 @@ type Flow struct {
     node1   Node
     node2   Node
     proto   uint8
+    iface   string
 }
 
 func printFlow(flow Flow) {
@@ -39,18 +43,94 @@ func printFlow(flow Flow) {
     fmt.Println (output)
 }
 
-func main() {
 
-    connections := make(map[Node]Node)
+func parseIfaces() (map[string]string, error) {
 
-    handler, err := pcap.OpenLive("wlp2s0", 200, true, pcap.BlockForever)
+    ifaces := make(map[string]string)
+
+    interfaces, err := net.Interfaces()
     if err != nil {
-        panic(err)
+        fmt.Println(err)
+        return nil, err
     }
 
-    err = handler.SetBPFFilter("ip")
+    for _, iface := range interfaces {
+
+        if iface.Flags & net.FlagUp == 0 {
+            continue
+        }
+
+        if iface.Flags & net.FlagLoopback != 0 {
+            continue
+        }
+
+        addrs, err := iface.Addrs()
+        if err != nil {
+            fmt.Println(err)
+            continue
+        }
+
+        if addrs == nil {
+            continue
+        }
+
+        for index, addr := range addrs {
+            if net.ParseIP(addr.String()).To4 != nil {
+                ifaces[addrs[index].String()] = iface.Name
+                continue
+            }
+        }
+    }
+
+    return ifaces, nil
+}
+
+func printInterfaces(interfaces map[string]string) {
+
+    for addr, iface := range interfaces {
+        fmt.Println(iface,":",addr)
+    }
+}
+
+func processFlow(flows map[string])
+
+
+func main() {
+
+    pcapFile := flag.String("f", "", "PCAP file to process")
+    flag.Parse()
+
+    if *pcapFile == "" {
+        fmt.Println("No PCAP file")
+        os.Exit(1)
+    }
+
+    connections := make(map[Node]Node)
+    ingress, egress := make([]Flow)
+
+
+    /*handler, err := pcap.OpenOffline("wlp2s0", 200, true, pcap.BlockForever)
     if err != nil {
         panic(err)
+    }*/
+
+    if _, err := os.Stat(*pcapFile); os.IsNotExist(err) {
+        fmt.Println(*pcapFile, "does not exist")
+        os.Exit(1)
+    }
+
+    ifaces, err := parseIfaces()
+    if err != nil {
+        fmt.Println(err)
+    }
+
+    handler, err := pcap.OpenOffline(*pcapFile)
+    if err != nil {
+        fmt.Println (err)
+    }
+
+    if err := handler.SetBPFFilter("ip"); err != nil {
+        fmt.Println(err)
     }
 
     packetSource := gopacket.NewPacketSource(handler, handler.LinkType())
@@ -69,6 +149,10 @@ func main() {
         tcplayer := packet.Layer(layers.LayerTypeTCP)
         if tcplayer != nil {
             tcp, _  := tcplayer.(*layers.TCP)
+            if !tcp.SYN || tcp.ACK {
+                continue
+            }
+
             flow.node1.port = tcp.TransportFlow().Src().String()
             flow.node2.port = tcp.TransportFlow().Dst().String()
             flow.proto      = TCP
@@ -89,9 +173,8 @@ func main() {
             continue
        }
 
-        connections[flow.node1] = flow.node2
-        printFlow(flow)
-        //fmt.Println (connections)
-
+       connections[flow.node1] = flow.node2
     }
+
+    processFlows(connections)
 }
