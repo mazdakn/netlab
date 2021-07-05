@@ -68,26 +68,34 @@ int main(int argc, char **argv) {
 		return -1;
 	}
 
-	struct bpf_program *prog = bpf_object__find_program_by_name(obj, section);
+	bpf_object__find_program_by_name(obj, section);
+
 
 	printf("=== Testing with TCP packet ===\n");
 	print_packet("Packet in", (unsigned char *)&tcp_packet, sizeof(tcp_packet));
 
-	int res = bpf_prog_test_run(prog_fd, repeat, &tcp_packet, sizeof(tcp_packet),
+	int ret = bpf_prog_test_run(prog_fd, repeat, &tcp_packet, sizeof(tcp_packet),
 			&packet_out, &packet_size, &retval, &duration);
+	if (ret) {
+		printf("Error running the test: %d\n", ret);
+		return -1;
+	}
 
 	print_packet("Packet out", (unsigned char *)&packet_out, packet_size);
-	
 	printf("Repeat: %d - Retval: %d - Duration %d\n", repeat, retval, duration);
+
 
 	printf("=== Testing with UDP packet ===\n");
 	print_packet("Packet in", (unsigned char *)&udp_packet, sizeof(udp_packet));
 
-	res = bpf_prog_test_run(prog_fd, repeat, &udp_packet, sizeof(udp_packet),
+	ret = bpf_prog_test_run(prog_fd, repeat, &udp_packet, sizeof(udp_packet),
 			&packet_out, &packet_size, &retval, &duration);
+	if (ret) {
+		printf("Error running the test: %d\n", ret);
+		return -1;
+	}
 
 	print_packet("Packet out", (unsigned char *)&packet_out, packet_size);
-	
 	printf("Repeat: %d - Retval: %d - Duration %d\n", repeat, retval, duration);
 
 	return 0;

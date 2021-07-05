@@ -1,9 +1,5 @@
-#ifndef __XDP_H__
-#define __XDP_H__
-
-#include <linux/bpf.h>
-#include <bpf_helpers.h>
-#include <bpf_endian.h>
+#ifndef __PARSER_H__
+#define __PARSER_H__
 
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -37,7 +33,6 @@ static __always_inline void print_cursor(struct hdr_cursor *headers) {
 												headers->pos);
 }
 
-// TODO: Fix the return values
 static __always_inline int validate_ptrs(struct hdr_cursor *headers, int size) {
 	if (headers->pos + size > headers->end) {
 		bpf_printk("not enough data-> start: %lu end: %lu size: %d\n", headers->start, 

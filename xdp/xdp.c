@@ -1,4 +1,8 @@
-#include "xdp.h"
+#include <linux/bpf.h>
+#include <bpf_helpers.h>
+#include <bpf_endian.h>
+
+#include "parser.h"
 
 struct flow_tuple {
 	__be32 saddr;
@@ -16,7 +20,7 @@ struct bpf_map_def SEC("maps") flowtracker = {
 };
 
 SEC("prog")
-static __always_inline int xdp_prog(struct xdp_md *ctx) {
+int xdp_prog(struct xdp_md *ctx) {
 	void *data_start = (void *)(long)ctx->data;
 	void *data_end   = (void *)(long)ctx->data_end;
 	struct flow_tuple flow = {};
