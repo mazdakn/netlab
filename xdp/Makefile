@@ -1,9 +1,9 @@
-CLANGFLAGS = -Wall -Werror -O2 -target bpf -emit-llvm -I./include/libbpf/src/
+CLANGFLAGS = -Wall -Werror -O2 -target bpf -emit-llvm -I../include/libbpf/src/
 CLANG := clang-11
 LLC := llc-11
 
-GCCFLAGS = -Wall -Werror -I./include/libbpf/src -L./include/libbpf/src
-LDFLAGS = -Wl,-rpath=./include/libbpf/src -lbpf -lelf
+GCCFLAGS = -Wall -Werror -I../include/libbpf/src -L../include/libbpf/src
+LDFLAGS = -Wl,-rpath=../include/libbpf/src -lbpf -lelf
 CC := gcc
 
 XDP_SRC:=xdp.c xdp-simple.c
@@ -19,6 +19,6 @@ xdp-simple:
 	$(LLC) -march=bpf -filetype=obj -o xdp-simple.o xdp-simple.ll
 
 xdp-test:
-	$(CC) $(GCCFLAGS) -o xdp-test xdp-test.c $(LDFLAGS)
+	$(CC) $(GCCFLAGS) -o xdp-bench xdp-bench.c $(LDFLAGS)
 clean:
 	rm -f *.o *.ll xdp-test

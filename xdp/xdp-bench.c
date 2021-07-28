@@ -16,6 +16,15 @@ void print_packet(const char *message, const unsigned char *packet, int size) {
 	printf("\n");
 }
 
+void print_context(const char *message, const unsigned char *ctx, int size) {
+	printf("%s(size=%d): ", message, size);
+	for (int i = 0; i <  size; i++) {
+		printf("%02x ", ctx[i]);
+	}
+
+	printf("\n");
+}
+
 int main(int argc, char **argv) {
 	unsigned char udp_packet[] = {
 					0x52, 0x54, 0x00, 0x5c, 0x54, 0xec, 0x52, 0x54,
@@ -24,7 +33,12 @@ int main(int argc, char **argv) {
 					0x17, 0xd8, 0x0a, 0x59, 0x80, 0x01, 0x0a, 0x59,
 					0x80, 0x92, 0xd5, 0x8c, 0x1f, 0x40, 0x00, 0x0a,
 					0x15, 0x61, 0x41, 0x0a};	
-
+/*
+	unsigned char udp_ctx[] = {
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2b,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00};
+*/
 	unsigned char tcp_packet[] = {
 					0x52, 0x54, 0x00, 0x5c, 0x54, 0xec, 0x52, 0x54,
 					0x00, 0xe6, 0xf4, 0x2e, 0x08, 0x00, 0x45, 0x00,
@@ -37,13 +51,17 @@ int main(int argc, char **argv) {
 					0xeb, 0x43, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03,
 					0x03, 0x07};
 
+	unsigned char tcp_ctx[] = {
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00};
+
 	char *filename, *section;
 	int prog_fd;
 	struct bpf_object *obj;
 	int repeat;
 	char packet_out[PACKET_MAX_SIZE];
-	__u32 retval, duration;
-	__u32 packet_size = 0;
+	char ctx_out[PACKET_MAX_SIZE];
 
 	if (argc < 4) {
 		printf("%s <filename> <section> <repeat>\n", argv[0]);
@@ -70,33 +88,52 @@ int main(int argc, char **argv) {
 
 	bpf_object__find_program_by_name(obj, section);
 
+	struct bpf_prog_test_run_attr test_attr = {
+		.prog_fd = prog_fd,
+		.repeat = repeat,
+		.data_in = &tcp_packet,
+		.data_size_in = sizeof(tcp_packet),
+		.data_out = &packet_out,
+		.data_size_out = 2000,
+		.ctx_in = &tcp_ctx,
+		.ctx_size_in = sizeof(tcp_ctx),
+		.ctx_out = &ctx_out,
+		.ctx_size_out = 2000,
+	};
 
 	printf("=== Testing with TCP packet ===\n");
 	print_packet("Packet in", (unsigned char *)&tcp_packet, sizeof(tcp_packet));
 
-	int ret = bpf_prog_test_run(prog_fd, repeat, &tcp_packet, sizeof(tcp_packet),
-			&packet_out, &packet_size, &retval, &duration);
+	int ret = bpf_prog_test_run_xattr(&test_attr);
 	if (ret) {
 		printf("Error running the test: %d\n", ret);
 		return -1;
 	}
 
-	print_packet("Packet out", (unsigned char *)&packet_out, packet_size);
-	printf("Repeat: %d - Retval: %d - Duration %d\n", repeat, retval, duration);
-
+	print_packet("Packet out", (unsigned char *)&packet_out,
+				test_attr.data_size_out);
+	print_packet("Context out", (unsigned char *)&ctx_out,
+				test_attr.ctx_size_out);
+	printf("Repeat: %d - Retval: %d - Duration %d\n", test_attr.repeat,
+				test_attr.retval, test_attr.duration);
 
 	printf("=== Testing with UDP packet ===\n");
 	print_packet("Packet in", (unsigned char *)&udp_packet, sizeof(udp_packet));
 
-	ret = bpf_prog_test_run(prog_fd, repeat, &udp_packet, sizeof(udp_packet),
-			&packet_out, &packet_size, &retval, &duration);
+	test_attr.data_in = &udp_packet;
+	test_attr.data_size_in = sizeof(udp_packet);
+	test_attr.data_out = &packet_out;
+	test_attr.data_size_out = 2000;
+
+	ret = bpf_prog_test_run_xattr(&test_attr);
 	if (ret) {
 		printf("Error running the test: %d\n", ret);
 		return -1;
 	}
 
-	print_packet("Packet out", (unsigned char *)&packet_out, packet_size);
-	printf("Repeat: %d - Retval: %d - Duration %d\n", repeat, retval, duration);
-
+	print_packet("Packet out", (unsigned char *)&packet_out,
+				test_attr.data_size_out);
+	printf("Repeat: %d - Retval: %d - Duration %d\n", test_attr.repeat,
+				test_attr.retval, test_attr.duration);
 	return 0;
 }
