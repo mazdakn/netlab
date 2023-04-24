@@ -1,0 +1,52 @@
+apiVersion: projectcalico.org/v3
+kind: BGPConfiguration
+metadata:
+  name: default
+spec:
+  nodeToNodeMeshEnabled: false
+  asNumber: 64512
+  logSeverityScreen: Debug
+---
+apiVersion: projectcalico.org/v3
+kind: BGPPeer
+metadata:
+  name: peer-with-route-reflectors
+spec:
+  nodeSelector: all()
+  peerSelector: route-reflector == 'true'
+---
+kind: BGPFilter
+apiVersion: projectcalico.org/v3
+metadata:
+  name: export-egress-ips
+spec:
+  exportV4:
+    - action: Accept
+      matchOperator: In
+      cidr: 10.10.10.0/28
+---
+apiVersion: projectcalico.org/v3
+kind: BGPPeer
+metadata:
+  name: azure-route-server-a
+spec:
+  peerIP: 10.225.0.4
+  reachableBy: 10.224.0.1
+  asNumber: 65515
+  keepOriginalNextHop: true
+  nodeSelector: route-reflector == 'true'
+  filters:
+    - export-egress-ips
+---
+apiVersion: projectcalico.org/v3
+kind: BGPPeer
+metadata:
+  name: azure-route-server-b
+spec:
+  peerIP: 10.225.0.5
+  reachableBy: 10.224.0.1
+  asNumber: 65515
+  keepOriginalNextHop: true
+  nodeSelector: route-reflector == 'true'
+  filters:
+    - export-egress-ips

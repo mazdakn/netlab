@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data-analysis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-analysis
+  namespace: data-analysis
+  labels:
+    app: data-analysis
+    tigera.io/address-group: data-analysis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-analysis
+      tigera.io/address-group: data-analysis
+  template:
+    metadata:
+      labels:
+        app: data-analysis
+        tigera.io/address-group: data-analysis
+    spec:
+      containers:
+      - image: nicolaka/netshoot
+        command:
+          - sleep
+          - infinity
+        imagePullPolicy: IfNotPresent
+        name: data-analysis
+      restartPolicy: Always
