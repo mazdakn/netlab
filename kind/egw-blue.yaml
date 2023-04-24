@@ -1,0 +1,18 @@
+apiVersion: operator.tigera.io/v1
+kind: EgressGateway
+metadata:
+  name: egress-gateway-blue
+  namespace: calico-egress
+spec:
+  logSeverity: "Info"
+  replicas: 1
+  ipPools:
+  - name: egress-ippool-blue
+  template:
+    metadata:
+      labels:
+        egress-code: blue
+    spec:
+      terminationGracePeriodSeconds: 0
+      nodeSelector:
+        kubernetes.io/os: linux
