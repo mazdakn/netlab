@@ -10,7 +10,7 @@ metadata:
   namespace: calico-egress
 spec:
   logSeverity: "Info"
-  replicas: 2
+  replicas: 1
   ipPools:
   - name: egress-ippool-red
   template:
