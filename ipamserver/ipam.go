@@ -2,12 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"io/ioutil"
 	"net"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
+)
+
+const (
+	defaultAddr string = "localhost:8080"
 )
 
 type Subnet struct {
@@ -69,7 +74,6 @@ func (i *ipamServer) postHandler(writer http.ResponseWriter, request *http.Reque
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	logrus.Infof("POST request for subnet %v", subnet.Cidr)
 
 	// Check if the subnet information is valid.
 	_, ipnet, err := net.ParseCIDR(subnet.Cidr)
@@ -124,4 +128,15 @@ func (i *ipamServer) getHandler(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	writer.Write(data)
+}
+
+func main() {
+	// Parse arguments and get the address to listen to.
+	addrPtr := flag.String("addr", defaultAddr, "Address to bind to")
+	flag.Parse()
+	addr := *addrPtr
+
+	// Create the IPAM Server and start it.
+	ipamSrv := newIPAMServer(addr)
+	ipamSrv.Start()
 }
