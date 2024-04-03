@@ -3,7 +3,8 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"io/ioutil"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 
@@ -59,7 +60,7 @@ func (i *ipamServer) subnetHandlers(writer http.ResponseWriter, request *http.Re
 // postHandler handles all POST requests.
 func (i *ipamServer) postHandler(writer http.ResponseWriter, request *http.Request) {
 	// Read the request.
-	body, err := ioutil.ReadAll(request.Body)
+	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get request body")
 		writer.WriteHeader(http.StatusBadRequest)
@@ -127,7 +128,17 @@ func (i *ipamServer) getHandler(writer http.ResponseWriter, request *http.Reques
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	writer.Write(data)
+	n, err := writer.Write(data)
+	if err != nil {
+		logrus.WithError(err).Error("Error in writing GET response")
+		return
+	}
+	if n != len(data) {
+		logrus.WithFields(logrus.Fields{
+			"data len":  fmt.Sprintf("%v", len(data)),
+			"data sent": n,
+		}).Errorf("Failed to write all data to GET response.")
+	}
 }
 
 func main() {
