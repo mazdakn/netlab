@@ -1,3 +1,5 @@
 # keys
 *.key
 *.pub
+
+bin/*
