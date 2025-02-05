@@ -1,0 +1,11 @@
+virtualServers:
+- name: testsv
+  addr: 1.1.1.1:8080
+  backends:
+  - 192.167.87.5:8080
+  - 10.10.10.10:9090
+- name: dmz
+  addr: 1.1.1.1:9090
+  backends:
+  - 11.1.1.1:9090
+  - 9.9.9.9:9090
