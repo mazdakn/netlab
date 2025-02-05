@@ -1,0 +1,15 @@
+maxBufferSize: 1600
+address: 0.0.0.0:9999
+tun:
+  name: uproxy
+  address: 10.100.100.100/24
+  mtu: 1400
+policies:
+  - dstAddr: 10.100.100.50/32
+    action: route=10.10.10.11:8888
+  - dstAddr: 10.100.100.20/32
+    action: drop
+  - dstAddr: 30.30.30.30/32
+    action: local
+  - dstAddr: 0.0.0.0/0
+    action: proxy
