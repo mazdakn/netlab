@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -15,6 +13,12 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	tcnetwork "github.com/testcontainers/testcontainers-go/network"
+)
+
+const (
+	// DefaultImage is the default container image used for lab nodes.
+	// Neither wireguard-tools nor tcpdump are required inside the image.
+	DefaultImage = "nicolaka/netshoot:latest"
 )
 
 // Lab manages the lifecycle of networks and container nodes for a single Go test.
@@ -49,7 +53,7 @@ type nodeConfig struct {
 	cmd         []string
 }
 
-// WithImage overrides the container image for a Node instead of building the default lab image.
+// WithImage overrides the container image for a Node.
 func WithImage(image string) NodeOption {
 	return func(c *nodeConfig) {
 		c.image = image
@@ -144,11 +148,13 @@ func (l *Lab) CreateNetwork(ctx context.Context, name, subnet, hostBridgeIP stri
 	return net, nil
 }
 
-// CreateNode starts a container node with NET_ADMIN capability and attaches it to all requested networks.
+// CreateNode starts a container node with NET_ADMIN capability and /dev/net/tun access,
+// attaching it to all requested networks.
 func (l *Lab) CreateNode(ctx context.Context, name string, opts ...NodeOption) (*Node, error) {
 	l.t.Helper()
 
 	cfg := &nodeConfig{
+		image:   DefaultImage,
 		sysctls: make(map[string]string),
 		capAdd:  []string{"NET_ADMIN", "NET_RAW"},
 		// Trap SIGTERM so container teardown completes immediately instead of waiting 10s
@@ -175,6 +181,13 @@ func (l *Lab) CreateNode(ctx context.Context, name string, opts ...NodeOption) (
 		HostConfigModifier: func(hc *container.HostConfig) {
 			hc.CapAdd = cfg.capAdd
 			hc.Sysctls = cfg.sysctls
+			hc.Devices = []container.DeviceMapping{
+				{
+					PathOnHost:        "/dev/net/tun",
+					PathInContainer:   "/dev/net/tun",
+					CgroupPermissions: "rwm",
+				},
+			}
 		},
 		EndpointSettingsModifier: func(settings map[string]*network.EndpointSettings) {
 			for _, att := range cfg.attachments {
@@ -188,17 +201,6 @@ func (l *Lab) CreateNode(ctx context.Context, name string, opts ...NodeOption) (
 				}
 			}
 		},
-	}
-
-	if cfg.image == "" {
-		_, thisFile, _, _ := runtime.Caller(0)
-		req.FromDockerfile = testcontainers.FromDockerfile{
-			Context:    filepath.Dir(thisFile),
-			Dockerfile: "Dockerfile.node",
-			Repo:       "netlab/node",
-			Tag:        "latest",
-			KeepImage:  true,
-		}
 	}
 
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

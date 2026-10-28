@@ -238,14 +238,14 @@ func TestWireGuardPeersViaGateway(t *testing.T) {
 		t.Fatalf("expected exported pcap file > 24 bytes (pcap global header), got info=%v err=%v", info, err)
 	}
 
-	// 9. Verify WireGuard handshake and transfer stats on peer-a
-	wgStatus, err := peerA.Exec(ctx, []string{"wg", "show", "wg0"})
+	// 9. Verify wireguard-go UAPI handshake and transfer stats on peer-a (without wg-tools)
+	wgStatus, err := peerA.WireGuardStatus(ctx, "wg0")
 	if err != nil {
-		t.Fatalf("inspect wg0 on peer-a: %v", err)
+		t.Fatalf("inspect wireguard-go UAPI status on peer-a: %v", err)
 	}
-	t.Logf("peer-a wg0 status:\n%s", wgStatus)
-	if !strings.Contains(wgStatus, "latest handshake") {
-		t.Fatalf("expected active WireGuard handshake in `wg show wg0`, got:\n%s", wgStatus)
+	t.Logf("peer-a wg0 UAPI status:\n%s", wgStatus)
+	if !strings.Contains(wgStatus, "last_handshake_time_sec=") || strings.Contains(wgStatus, "last_handshake_time_sec=0") {
+		t.Fatalf("expected non-zero last_handshake_time_sec in UAPI status, got:\n%s", wgStatus)
 	}
 
 	// 10. Verify the gateway actually forwarded the encrypted UDP:51820 packets
