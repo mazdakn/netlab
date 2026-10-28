@@ -2,10 +2,13 @@ package scenarios
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gopacket/gopacket/layers"
 	"github.com/mazdak/netlab/pkg/lab"
 )
 
@@ -130,14 +133,112 @@ func TestWireGuardPeersViaGateway(t *testing.T) {
 		t.Fatalf("setup wireguard on peer-b: %v", err)
 	}
 
-	// 6. Send traffic over the WireGuard tunnel (10.100.0.1 -> 10.100.0.2)
+	// 6. Start pure-Go gopacket/pcapgo captures on the gateway (underlay UDP:51820) and peer-b (overlay wg0 ICMP)
+	gwCapture, err := gateway.StartCapture(
+		ctx,
+		lab.WithInterface("any"),
+		lab.WithBPFFilter("udp port 51820"),
+		lab.WithSaveOnFailure("artifacts/pcap"),
+	)
+	if err != nil {
+		t.Fatalf("start gateway packet capture: %v", err)
+	}
+
+	wgCapture, err := peerB.StartCapture(
+		ctx,
+		lab.WithInterface("wg0"),
+		lab.WithBPFFilter("icmp"),
+		lab.WithSaveOnFailure("artifacts/pcap"),
+	)
+	if err != nil {
+		t.Fatalf("start peer-b wg0 packet capture: %v", err)
+	}
+
+	// 7. Send traffic over the WireGuard tunnel (10.100.0.1 -> 10.100.0.2)
 	pingOut, err := peerA.Ping(ctx, "10.100.0.2", 3)
 	if err != nil {
 		t.Fatalf("overlay ping over wireguard tunnel failed: %v\n%s", err, pingOut)
 	}
 	t.Logf("Overlay ping output:\n%s", pingOut)
 
-	// 7. Verify WireGuard handshake and transfer stats on peer-a
+	// 8. Stop captures and inspect decoded gopacket.Packet layers
+	if err := gwCapture.Stop(ctx); err != nil {
+		t.Fatalf("stop gateway packet capture: %v", err)
+	}
+	if err := wgCapture.Stop(ctx); err != nil {
+		t.Fatalf("stop peer-b wg0 packet capture: %v", err)
+	}
+
+	gwPackets, err := gwCapture.Packets(ctx)
+	if err != nil {
+		t.Fatalf("decode gateway captured packets: %v", err)
+	}
+	gwSummary, _ := gwCapture.DumpText(ctx)
+	t.Logf("Gateway captured %d encrypted UDP:51820 packets (gopacket):\n%s", len(gwPackets), gwSummary)
+	if len(gwPackets) == 0 {
+		t.Fatalf("expected gateway to capture UDP:51820 packets, got 0")
+	}
+
+	foundAtoB := false
+	for _, pkt := range gwPackets {
+		ip4, ok := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+		if !ok {
+			continue
+		}
+		udp, ok := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
+		if !ok {
+			continue
+		}
+		if ip4.SrcIP.String() == "172.28.10.10" && ip4.DstIP.String() == "172.28.20.10" &&
+			uint16(udp.SrcPort) == 51820 && uint16(udp.DstPort) == 51820 {
+			foundAtoB = true
+		}
+	}
+	if !foundAtoB {
+		t.Fatalf("expected gopacket UDP layer from 172.28.10.10:51820 to 172.28.20.10:51820 in gateway capture")
+	}
+
+	wgPackets, err := wgCapture.Packets(ctx)
+	if err != nil {
+		t.Fatalf("decode peer-b wg0 captured packets: %v", err)
+	}
+	wgSummary, _ := wgCapture.DumpText(ctx)
+	t.Logf("peer-b wg0 captured %d decrypted ICMPv4 packets (gopacket):\n%s", len(wgPackets), wgSummary)
+
+	var echoRequests, echoReplies int
+	for _, pkt := range wgPackets {
+		ip4, ok := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+		if !ok {
+			continue
+		}
+		icmp4, ok := pkt.Layer(layers.LayerTypeICMPv4).(*layers.ICMPv4)
+		if !ok {
+			continue
+		}
+		if ip4.SrcIP.String() == "10.100.0.1" && ip4.DstIP.String() == "10.100.0.2" &&
+			icmp4.TypeCode.Type() == layers.ICMPv4TypeEchoRequest {
+			echoRequests++
+		}
+		if ip4.SrcIP.String() == "10.100.0.2" && ip4.DstIP.String() == "10.100.0.1" &&
+			icmp4.TypeCode.Type() == layers.ICMPv4TypeEchoReply {
+			echoReplies++
+		}
+	}
+	if echoRequests < 3 || echoReplies < 3 {
+		t.Fatalf("expected at least 3 ICMPv4 EchoRequests and 3 EchoReplies on wg0, got requests=%d replies=%d",
+			echoRequests, echoReplies)
+	}
+
+	// Verify SaveToFile exports a valid non-empty .pcap file to the host
+	pcapFile := filepath.Join(t.TempDir(), "gateway-wg.pcap")
+	if err := gwCapture.SaveToFile(ctx, pcapFile); err != nil {
+		t.Fatalf("save gateway pcap to file: %v", err)
+	}
+	if info, err := os.Stat(pcapFile); err != nil || info.Size() <= 24 {
+		t.Fatalf("expected exported pcap file > 24 bytes (pcap global header), got info=%v err=%v", info, err)
+	}
+
+	// 9. Verify WireGuard handshake and transfer stats on peer-a
 	wgStatus, err := peerA.Exec(ctx, []string{"wg", "show", "wg0"})
 	if err != nil {
 		t.Fatalf("inspect wg0 on peer-a: %v", err)
@@ -147,7 +248,7 @@ func TestWireGuardPeersViaGateway(t *testing.T) {
 		t.Fatalf("expected active WireGuard handshake in `wg show wg0`, got:\n%s", wgStatus)
 	}
 
-	// 8. Verify the gateway actually forwarded the encrypted UDP:51820 packets
+	// 10. Verify the gateway actually forwarded the encrypted UDP:51820 packets
 	fwdStats, err := gateway.Exec(ctx, []string{"iptables", "-L", "FORWARD", "-v", "-n", "-x"})
 	if err != nil {
 		t.Fatalf("inspect gateway FORWARD counters: %v", err)

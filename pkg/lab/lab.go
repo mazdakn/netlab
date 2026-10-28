@@ -85,6 +85,7 @@ func WithIPForwarding() NodeOption {
 
 // Node represents a running container participating in a networking scenario.
 type Node struct {
+	t         testing.TB
 	Name      string
 	Container testcontainers.Container
 	IPs       map[string]string // keyed by Network.Name
@@ -210,6 +211,7 @@ func (l *Lab) CreateNode(ctx context.Context, name string, opts ...NodeOption) (
 	}
 
 	node := &Node{
+		t:         l.t,
 		Name:      name,
 		Container: ctr,
 		IPs:       ips,

@@ -3,8 +3,10 @@ module github.com/mazdak/netlab
 go 1.26.2
 
 require (
+	github.com/gopacket/gopacket v1.7.4
 	github.com/moby/moby/api v1.55.0
 	github.com/testcontainers/testcontainers-go v0.44.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -55,6 +57,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
