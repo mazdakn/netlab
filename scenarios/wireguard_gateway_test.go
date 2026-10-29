@@ -12,17 +12,17 @@ import (
 	"github.com/mazdak/netlab/pkg/lab"
 )
 
-// TestWireGuardPeersViaGateway tests two WireGuard peers on separate subnets (net-a and net-b)
-// whose encrypted underlay UDP traffic is routed through an intermediate gateway container:
+// TestWireGuardPeersViaSuricata tests two WireGuard peers on separate subnets (net-a and net-b)
+// whose encrypted underlay UDP traffic is routed and inspected through an intermediate Suricata gateway container:
 //
 //	+--------------------+          +-----------------------+          +--------------------+
-//	|       peer-a       |          |        gateway        |          |       peer-b       |
+//	|       peer-a       |          |   gateway (suricata)  |          |       peer-b       |
 //	|                    |  net-a   |   (ip_forward = 1)    |  net-b   |                    |
 //	| eth0: 172.28.10.10 +----------+ eth0: 172.28.10.254   |          |                    |
 //	| wg0:  10.100.0.1   |          | eth1: 172.28.20.254   +----------+ eth0: 172.28.20.10 |
 //	|                    |          |                       |          | wg0:  10.100.0.2   |
 //	+--------------------+          +-----------------------+          +--------------------+
-func TestWireGuardPeersViaGateway(t *testing.T) {
+func TestWireGuardPeersViaSuricata(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -38,10 +38,11 @@ func TestWireGuardPeersViaGateway(t *testing.T) {
 		t.Fatalf("create net-b: %v", err)
 	}
 
-	// 2. Start the intermediate gateway node connected to both net-a and net-b
+	// 2. Start the intermediate Suricata gateway node connected to both net-a and net-b
 	gateway, err := topo.CreateNode(
 		ctx,
 		"gateway",
+		lab.WithSuricata(),
 		lab.WithNetwork(netA, "172.28.10.254"),
 		lab.WithNetwork(netB, "172.28.20.254"),
 		lab.WithIPForwarding(),
@@ -50,11 +51,14 @@ func TestWireGuardPeersViaGateway(t *testing.T) {
 		t.Fatalf("create gateway node: %v", err)
 	}
 
-	// Add an iptables rule on the gateway FORWARD chain to count UDP:51820 (WireGuard) packets
-	if _, err := gateway.Exec(ctx, []string{
-		"iptables", "-I", "FORWARD", "1", "-p", "udp", "--dport", "51820", "-j", "ACCEPT",
-	}); err != nil {
-		t.Fatalf("configure gateway iptables counter: %v", err)
+	// Configure a Suricata rule on the gateway to alert on forwarded UDP:51820 (WireGuard) traffic
+	suricataSetup := `mkdir -p /var/log/suricata /etc/suricata/rules /var/run/suricata && ` +
+		`echo 'alert udp any any -> any 51820 (msg:"WireGuard UDP Traffic"; sid:1000001; rev:1;)' > /etc/suricata/rules/local.rules && ` +
+		`suricata -c /etc/suricata/suricata.yaml -S /etc/suricata/rules/local.rules -i eth0 -i eth1 -k none -l /var/log/suricata -D --pidfile /var/run/suricata.pid && ` +
+		`for i in $(seq 1 100); do grep -qi "engine started" /var/log/suricata/suricata.log 2>/dev/null && exit 0; sleep 0.05; done; ` +
+		`cat /var/log/suricata/suricata.log >&2; exit 1`
+	if out, err := gateway.Exec(ctx, []string{"sh", "-c", suricataSetup}); err != nil {
+		t.Fatalf("start suricata on gateway: %v\n%s", err, out)
 	}
 
 	// 3. Start peer-a on net-a and peer-b on net-b
@@ -248,13 +252,17 @@ func TestWireGuardPeersViaGateway(t *testing.T) {
 		t.Fatalf("expected non-zero last_handshake_time_sec in UAPI status, got:\n%s", wgStatus)
 	}
 
-	// 10. Verify the gateway actually forwarded the encrypted UDP:51820 packets
-	fwdStats, err := gateway.Exec(ctx, []string{"iptables", "-L", "FORWARD", "-v", "-n", "-x"})
+	// 10. Stop Suricata to flush logs and verify it detected the forwarded UDP:51820 WireGuard traffic
+	stopAndReadAlerts := `if [ -f /var/run/suricata.pid ]; then ` +
+		`pid=$(cat /var/run/suricata.pid); kill -TERM $pid 2>/dev/null || true; ` +
+		`for i in $(seq 1 50); do kill -0 $pid 2>/dev/null || break; sleep 0.05; done; ` +
+		`fi; cat /var/log/suricata/fast.log`
+	suricataAlerts, err := gateway.Exec(ctx, []string{"sh", "-c", stopAndReadAlerts})
 	if err != nil {
-		t.Fatalf("inspect gateway FORWARD counters: %v", err)
+		t.Fatalf("inspect gateway suricata alerts: %v", err)
 	}
-	t.Logf("gateway FORWARD counters:\n%s", fwdStats)
-	if !strings.Contains(fwdStats, "udp dpt:51820") || strings.Contains(fwdStats, "0        0 ACCEPT     udp") {
-		t.Fatalf("expected non-zero UDP:51820 packets forwarded by gateway, got:\n%s", fwdStats)
+	t.Logf("gateway Suricata fast.log alerts:\n%s", suricataAlerts)
+	if !strings.Contains(suricataAlerts, "WireGuard UDP Traffic") || !strings.Contains(suricataAlerts, "172.28.10.10:51820 -> 172.28.20.10:51820") {
+		t.Fatalf("expected Suricata alert for WireGuard UDP:51820 traffic (172.28.10.10:51820 -> 172.28.20.10:51820), got:\n%s", suricataAlerts)
 	}
 }
