@@ -38,11 +38,10 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 		t.Fatalf("create net-b: %v", err)
 	}
 
-	// 2. Start the intermediate Suricata gateway node connected to both net-a and net-b
+	// 2. Start the intermediate gateway node connected to both net-a and net-b
 	gateway, err := topo.CreateNode(
 		ctx,
 		"gateway",
-		lab.WithSuricata(),
 		lab.WithNetwork(netA, "172.28.10.254"),
 		lab.WithNetwork(netB, "172.28.20.254"),
 		lab.WithIPForwarding(),
@@ -51,14 +50,14 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 		t.Fatalf("create gateway node: %v", err)
 	}
 
-	// Configure a Suricata rule on the gateway to alert on forwarded UDP:51820 (WireGuard) traffic
-	suricataSetup := `mkdir -p /var/log/suricata /etc/suricata/rules /var/run/suricata && ` +
-		`echo 'alert udp any any -> any 51820 (msg:"WireGuard UDP Traffic"; sid:1000001; rev:1;)' > /etc/suricata/rules/local.rules && ` +
-		`suricata -c /etc/suricata/suricata.yaml -S /etc/suricata/rules/local.rules -i eth0 -i eth1 -k none -l /var/log/suricata -D --pidfile /var/run/suricata.pid && ` +
-		`for i in $(seq 1 100); do grep -qi "engine started" /var/log/suricata/suricata.log 2>/dev/null && exit 0; sleep 0.05; done; ` +
-		`cat /var/log/suricata/suricata.log >&2; exit 1`
-	if out, err := gateway.Exec(ctx, []string{"sh", "-c", suricataSetup}); err != nil {
-		t.Fatalf("start suricata on gateway: %v\n%s", err, out)
+	// Start Suricata on the gateway to inspect and alert on forwarded UDP:51820 (WireGuard) traffic
+	suricata, err := gateway.StartSuricata(
+		ctx,
+		lab.WithSuricataInterfaces("eth0", "eth1"),
+		lab.WithSuricataRule(`alert udp any any -> any 51820 (msg:"WireGuard UDP Traffic"; sid:1000001; rev:1;)`),
+	)
+	if err != nil {
+		t.Fatalf("start suricata on gateway: %v", err)
 	}
 
 	// 3. Start peer-a on net-a and peer-b on net-b
@@ -253,16 +252,26 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 	}
 
 	// 10. Stop Suricata to flush logs and verify it detected the forwarded UDP:51820 WireGuard traffic
-	stopAndReadAlerts := `if [ -f /var/run/suricata.pid ]; then ` +
-		`pid=$(cat /var/run/suricata.pid); kill -TERM $pid 2>/dev/null || true; ` +
-		`for i in $(seq 1 50); do kill -0 $pid 2>/dev/null || break; sleep 0.05; done; ` +
-		`fi; cat /var/log/suricata/fast.log`
-	suricataAlerts, err := gateway.Exec(ctx, []string{"sh", "-c", stopAndReadAlerts})
+	fastLog, err := suricata.FastLog(ctx)
 	if err != nil {
-		t.Fatalf("inspect gateway suricata alerts: %v", err)
+		t.Fatalf("read gateway suricata fast.log: %v", err)
 	}
-	t.Logf("gateway Suricata fast.log alerts:\n%s", suricataAlerts)
-	if !strings.Contains(suricataAlerts, "WireGuard UDP Traffic") || !strings.Contains(suricataAlerts, "172.28.10.10:51820 -> 172.28.20.10:51820") {
-		t.Fatalf("expected Suricata alert for WireGuard UDP:51820 traffic (172.28.10.10:51820 -> 172.28.20.10:51820), got:\n%s", suricataAlerts)
+	t.Logf("gateway Suricata fast.log alerts:\n%s", fastLog)
+
+	alerts, err := suricata.Alerts(ctx)
+	if err != nil {
+		t.Fatalf("read gateway suricata eve.json alerts: %v", err)
+	}
+	foundAlert := false
+	for _, a := range alerts {
+		if a.Alert.SignatureID == 1000001 && a.SrcIP == "172.28.10.10" && a.DestIP == "172.28.20.10" &&
+			a.SrcPort == 51820 && a.DestPort == 51820 {
+			foundAlert = true
+			break
+		}
+	}
+	if !foundAlert {
+		t.Fatalf("expected Suricata alert (sid=1000001) for 172.28.10.10:51820 -> 172.28.20.10:51820, got %d alerts:\n%s",
+			len(alerts), fastLog)
 	}
 }

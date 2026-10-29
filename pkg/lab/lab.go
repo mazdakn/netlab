@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os/exec"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
@@ -21,29 +19,7 @@ const (
 	// DefaultImage is the default container image used for lab nodes.
 	// Neither wireguard-tools nor tcpdump are required inside the image.
 	DefaultImage = "alpine:latest"
-
-	// SuricataImage is the container image built from alpine:latest with only suricata installed.
-	SuricataImage = "netlab/suricata:latest"
 )
-
-var (
-	suricataImageOnce sync.Once
-	suricataImageErr  error
-)
-
-func ensureSuricataImage() error {
-	suricataImageOnce.Do(func() {
-		if err := exec.Command("docker", "image", "inspect", SuricataImage).Run(); err == nil {
-			return
-		}
-		cmd := exec.Command("docker", "build", "-t", SuricataImage, "-")
-		cmd.Stdin = strings.NewReader("FROM alpine:latest\nRUN apk add --no-cache suricata\n")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			suricataImageErr = fmt.Errorf("build %s: %w (%s)", SuricataImage, err, strings.TrimSpace(string(out)))
-		}
-	})
-	return suricataImageErr
-}
 
 // Lab manages the lifecycle of networks and container nodes for a single Go test.
 type Lab struct {
@@ -81,13 +57,6 @@ type nodeConfig struct {
 func WithImage(image string) NodeOption {
 	return func(c *nodeConfig) {
 		c.image = image
-	}
-}
-
-// WithSuricata configures the Node to use SuricataImage (alpine:latest + suricata).
-func WithSuricata() NodeOption {
-	return func(c *nodeConfig) {
-		c.image = SuricataImage
 	}
 }
 
@@ -193,12 +162,6 @@ func (l *Lab) CreateNode(ctx context.Context, name string, opts ...NodeOption) (
 	}
 	for _, opt := range opts {
 		opt(cfg)
-	}
-
-	if cfg.image == SuricataImage {
-		if err := ensureSuricataImage(); err != nil {
-			return nil, err
-		}
 	}
 
 	ips := make(map[string]string, len(cfg.attachments))
