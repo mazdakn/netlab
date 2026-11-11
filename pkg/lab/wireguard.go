@@ -28,7 +28,7 @@ func buildWGAgent() (string, error) {
 	wgAgentBuildOnce.Do(func() {
 		_, thisFile, _, _ := runtime.Caller(0)
 		repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
-		agentSrc := filepath.Join(repoRoot, "internal", "wgagent")
+		agentSrc := filepath.Join(repoRoot, "cmd", "wgagent")
 
 		tmpFile, err := os.CreateTemp("", "netlab-wg-agent-*")
 		if err != nil {

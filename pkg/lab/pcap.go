@@ -32,7 +32,7 @@ func buildPcapAgent() (string, error) {
 	agentBuildOnce.Do(func() {
 		_, thisFile, _, _ := runtime.Caller(0)
 		repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
-		agentSrc := filepath.Join(repoRoot, "internal", "pcapagent")
+		agentSrc := filepath.Join(repoRoot, "cmd", "pcapagent")
 
 		tmpFile, err := os.CreateTemp("", "netlab-pcap-agent-*")
 		if err != nil {
