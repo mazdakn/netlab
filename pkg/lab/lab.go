@@ -176,8 +176,12 @@ func (l *Lab) CreateNode(ctx context.Context, name string, opts ...NodeOption) (
 	}
 
 	req := testcontainers.ContainerRequest{
+		Name:  name,
 		Image: cfg.image,
 		Cmd:   cfg.cmd,
+		ConfigModifier: func(cc *container.Config) {
+			cc.Hostname = name
+		},
 		HostConfigModifier: func(hc *container.HostConfig) {
 			hc.CapAdd = cfg.capAdd
 			hc.Sysctls = cfg.sysctls

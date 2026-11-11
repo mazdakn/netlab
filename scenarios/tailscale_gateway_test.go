@@ -14,7 +14,7 @@ import (
 // coordinated by a self-contained Headscale server running on an intermediate gateway container:
 //
 //	+--------------------+          +--------------------------+          +--------------------+
-//	|       node-a       |          |    gateway (headscale)   |          |       node-b       |
+//	|     ts-node-a      |          |     headscale-gateway    |          |     ts-node-b      |
 //	|                    |  net-a   |     (ip_forward = 1)     |  net-b   |                    |
 //	| eth0: 172.28.10.10 +----------+ eth0: 172.28.10.254      |          |                    |
 //	| ts0:  100.64.0.1   |          | eth1: 172.28.20.254      +----------+ eth0: 172.28.20.10 |
@@ -39,45 +39,45 @@ func TestTailscaleTailnetViaGateway(t *testing.T) {
 	// 2. Start the intermediate gateway node connected to both net-a and net-b
 	gateway, err := topo.CreateNode(
 		ctx,
-		"gateway",
+		"headscale-gateway",
 		lab.WithNetwork(netA, "172.28.10.254"),
 		lab.WithNetwork(netB, "172.28.20.254"),
 		lab.WithIPForwarding(),
 	)
 	if err != nil {
-		t.Fatalf("create gateway node: %v", err)
+		t.Fatalf("create headscale-gateway node: %v", err)
 	}
 
-	// 3. Start node-a on net-a and node-b on net-b
+	// 3. Start ts-node-a on net-a and ts-node-b on net-b
 	nodeA, err := topo.CreateNode(
 		ctx,
-		"node-a",
+		"ts-node-a",
 		lab.WithNetwork(netA, "172.28.10.10"),
 	)
 	if err != nil {
-		t.Fatalf("create node-a: %v", err)
+		t.Fatalf("create ts-node-a: %v", err)
 	}
 
 	nodeB, err := topo.CreateNode(
 		ctx,
-		"node-b",
+		"ts-node-b",
 		lab.WithNetwork(netB, "172.28.20.10"),
 	)
 	if err != nil {
-		t.Fatalf("create node-b: %v", err)
+		t.Fatalf("create ts-node-b: %v", err)
 	}
 
-	// 4. Configure static underlay routes on node-a and node-b via the gateway
+	// 4. Configure static underlay routes on ts-node-a and ts-node-b via the gateway
 	if err := nodeA.AddRoute(ctx, netB.Subnet, gateway.IPs[netA.Name]); err != nil {
-		t.Fatalf("add static route on node-a: %v", err)
+		t.Fatalf("add static route on ts-node-a: %v", err)
 	}
 	if err := nodeB.AddRoute(ctx, netA.Subnet, gateway.IPs[netB.Name]); err != nil {
-		t.Fatalf("add static route on node-b: %v", err)
+		t.Fatalf("add static route on ts-node-b: %v", err)
 	}
 
 	// Verify underlay reachability across the gateway before bringing up the tailnet
 	if out, err := nodeA.Ping(ctx, nodeB.IPs[netB.Name], 2); err != nil {
-		t.Fatalf("underlay ping from node-a to node-b failed: %v\n%s", err, out)
+		t.Fatalf("underlay ping from ts-node-a to ts-node-b failed: %v\n%s", err, out)
 	}
 
 	// 5. Install Headscale on the gateway and Tailscale on both nodes concurrently
@@ -125,44 +125,44 @@ func TestTailscaleTailnetViaGateway(t *testing.T) {
 		t.Fatalf("create headscale pre-auth key: %v", err)
 	}
 
-	// 7. Join node-a and node-b to the Headscale tailnet
+	// 7. Join ts-node-a and ts-node-b to the Headscale tailnet
 	tsA, err := nodeA.StartTailscale(
 		ctx,
 		lab.WithLoginServer(hs.URL()),
 		lab.WithAuthKey(authKey),
-		lab.WithHostname("node-a"),
+		lab.WithHostname("ts-node-a"),
 		lab.WithTailscalePort(lab.DefaultTailscalePort),
 	)
 	if err != nil {
-		t.Fatalf("start tailscale on node-a: %v", err)
+		t.Fatalf("start tailscale on ts-node-a: %v", err)
 	}
 
 	tsB, err := nodeB.StartTailscale(
 		ctx,
 		lab.WithLoginServer(hs.URL()),
 		lab.WithAuthKey(authKey),
-		lab.WithHostname("node-b"),
+		lab.WithHostname("ts-node-b"),
 		lab.WithTailscalePort(lab.DefaultTailscalePort),
 	)
 	if err != nil {
-		t.Fatalf("start tailscale on node-b: %v", err)
+		t.Fatalf("start tailscale on ts-node-b: %v", err)
 	}
 
-	t.Logf("Tailscale overlay IPs assigned: node-a=%s, node-b=%s", tsA.IPv4Addr, tsB.IPv4Addr)
+	t.Logf("Tailscale overlay IPs assigned: ts-node-a=%s, ts-node-b=%s", tsA.IPv4Addr, tsB.IPv4Addr)
 	if tsA.IPv4Addr != "100.64.0.1" || tsB.IPv4Addr != "100.64.0.2" {
-		t.Fatalf("expected sequential tailnet IPs 100.64.0.1 and 100.64.0.2, got node-a=%s node-b=%s",
+		t.Fatalf("expected sequential tailnet IPs 100.64.0.1 and 100.64.0.2, got ts-node-a=%s ts-node-b=%s",
 			tsA.IPv4Addr, tsB.IPv4Addr)
 	}
 
 	// Wait until both nodes see each other online in their tailnet peer map
 	if _, err := tsA.WaitForPeer(ctx, tsB.IPv4Addr); err != nil {
-		t.Fatalf("node-a waiting for peer node-b (%s): %v", tsB.IPv4Addr, err)
+		t.Fatalf("ts-node-a waiting for peer ts-node-b (%s): %v", tsB.IPv4Addr, err)
 	}
 	if _, err := tsB.WaitForPeer(ctx, tsA.IPv4Addr); err != nil {
-		t.Fatalf("node-b waiting for peer node-a (%s): %v", tsA.IPv4Addr, err)
+		t.Fatalf("ts-node-b waiting for peer ts-node-a (%s): %v", tsA.IPv4Addr, err)
 	}
 
-	// 8. Start packet captures on gateway (underlay UDP:41641) and node-b (overlay tailscale0 ICMP)
+	// 8. Start packet captures on gateway (underlay UDP:41641) and ts-node-b (overlay tailscale0 ICMP)
 	gwCapture, err := gateway.StartCapture(
 		ctx,
 		lab.WithInterface("any"),
@@ -180,21 +180,21 @@ func TestTailscaleTailnetViaGateway(t *testing.T) {
 		lab.WithSaveOnFailure("artifacts/pcap"),
 	)
 	if err != nil {
-		t.Fatalf("start node-b tailscale0 packet capture: %v", err)
+		t.Fatalf("start ts-node-b tailscale0 packet capture: %v", err)
 	}
 
 	// 9. Probe Tailscale peer path and send ICMP echo traffic over the tailnet (100.64.0.1 -> 100.64.0.2)
 	tsPingOutA, err := tsA.Ping(ctx, tsB.IPv4Addr, 1)
 	if err != nil {
-		t.Fatalf("tailscale ping from node-a to node-b failed: %v\n%s", err, tsPingOutA)
+		t.Fatalf("tailscale ping from ts-node-a to ts-node-b failed: %v\n%s", err, tsPingOutA)
 	}
-	t.Logf("Tailscale ping (node-a -> node-b) output:\n%s", tsPingOutA)
+	t.Logf("Tailscale ping (ts-node-a -> ts-node-b) output:\n%s", tsPingOutA)
 
 	tsPingOutB, err := tsB.Ping(ctx, tsA.IPv4Addr, 1)
 	if err != nil {
-		t.Fatalf("tailscale ping from node-b to node-a failed: %v\n%s", err, tsPingOutB)
+		t.Fatalf("tailscale ping from ts-node-b to ts-node-a failed: %v\n%s", err, tsPingOutB)
 	}
-	t.Logf("Tailscale ping (node-b -> node-a) output:\n%s", tsPingOutB)
+	t.Logf("Tailscale ping (ts-node-b -> ts-node-a) output:\n%s", tsPingOutB)
 
 	icmpPingOut, err := nodeA.Ping(ctx, tsB.IPv4Addr, 3)
 	if err != nil {
@@ -207,7 +207,7 @@ func TestTailscaleTailnetViaGateway(t *testing.T) {
 		t.Fatalf("stop gateway packet capture: %v", err)
 	}
 	if err := tsCapture.Stop(ctx); err != nil {
-		t.Fatalf("stop node-b tailscale0 packet capture: %v", err)
+		t.Fatalf("stop ts-node-b tailscale0 packet capture: %v", err)
 	}
 
 	gwPackets, err := gwCapture.Packets(ctx)
@@ -242,10 +242,10 @@ func TestTailscaleTailnetViaGateway(t *testing.T) {
 
 	tsPackets, err := tsCapture.Packets(ctx)
 	if err != nil {
-		t.Fatalf("decode node-b tailscale0 captured packets: %v", err)
+		t.Fatalf("decode ts-node-b tailscale0 captured packets: %v", err)
 	}
 	tsSummary, _ := tsCapture.DumpText(ctx)
-	t.Logf("node-b tailscale0 captured %d decrypted ICMPv4 packets (gopacket):\n%s", len(tsPackets), tsSummary)
+	t.Logf("ts-node-b tailscale0 captured %d decrypted ICMPv4 packets (gopacket):\n%s", len(tsPackets), tsSummary)
 
 	var echoRequests, echoReplies int
 	for _, pkt := range tsPackets {
@@ -271,28 +271,28 @@ func TestTailscaleTailnetViaGateway(t *testing.T) {
 			echoRequests, echoReplies)
 	}
 
-	// 11. Verify Tailscale status and peer transfer counters on node-a
+	// 11. Verify Tailscale status and peer transfer counters on ts-node-a
 	statusA, err := tsA.Status(ctx)
 	if err != nil {
-		t.Fatalf("query tailscale status on node-a: %v", err)
+		t.Fatalf("query tailscale status on ts-node-a: %v", err)
 	}
 	if statusA.BackendState != "Running" {
-		t.Fatalf("expected node-a BackendState=Running, got %q", statusA.BackendState)
+		t.Fatalf("expected ts-node-a BackendState=Running, got %q", statusA.BackendState)
 	}
 
 	foundPeerB := false
 	for _, peer := range statusA.Peer {
-		if peer.HostName == "node-b" {
+		if peer.HostName == "ts-node-b" {
 			foundPeerB = true
-			t.Logf("node-a peer status for node-b: CurAddr=%s Relay=%s RxBytes=%d TxBytes=%d",
+			t.Logf("ts-node-a peer status for ts-node-b: CurAddr=%s Relay=%s RxBytes=%d TxBytes=%d",
 				peer.CurAddr, peer.Relay, peer.RxBytes, peer.TxBytes)
 			if peer.RxBytes <= 0 || peer.TxBytes <= 0 {
-				t.Fatalf("expected positive RxBytes and TxBytes for peer node-b, got rx=%d tx=%d",
+				t.Fatalf("expected positive RxBytes and TxBytes for peer ts-node-b, got rx=%d tx=%d",
 					peer.RxBytes, peer.TxBytes)
 			}
 		}
 	}
 	if !foundPeerB {
-		t.Fatalf("expected peer node-b in node-a tailscale status")
+		t.Fatalf("expected peer ts-node-b in ts-node-a tailscale status")
 	}
 }

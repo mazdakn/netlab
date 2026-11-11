@@ -16,7 +16,7 @@ import (
 // whose encrypted underlay UDP traffic is routed and inspected through an intermediate Suricata gateway container:
 //
 //	+--------------------+          +-----------------------+          +--------------------+
-//	|       peer-a       |          |   gateway (suricata)  |          |       peer-b       |
+//	|     wg-peer-a      |          |   suricata-gateway    |          |     wg-peer-b      |
 //	|                    |  net-a   |   (ip_forward = 1)    |  net-b   |                    |
 //	| eth0: 172.28.10.10 +----------+ eth0: 172.28.10.254   |          |                    |
 //	| wg0:  10.100.0.1   |          | eth1: 172.28.20.254   +----------+ eth0: 172.28.20.10 |
@@ -41,13 +41,13 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 	// 2. Start the intermediate gateway node connected to both net-a and net-b
 	gateway, err := topo.CreateNode(
 		ctx,
-		"gateway",
+		"suricata-gateway",
 		lab.WithNetwork(netA, "172.28.10.254"),
 		lab.WithNetwork(netB, "172.28.20.254"),
 		lab.WithIPForwarding(),
 	)
 	if err != nil {
-		t.Fatalf("create gateway node: %v", err)
+		t.Fatalf("create suricata-gateway node: %v", err)
 	}
 
 	// Start Suricata on the gateway to inspect and alert on forwarded UDP:51820 (WireGuard) traffic
@@ -60,46 +60,46 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 		t.Fatalf("start suricata on gateway: %v", err)
 	}
 
-	// 3. Start peer-a on net-a and peer-b on net-b
+	// 3. Start wg-peer-a on net-a and wg-peer-b on net-b
 	peerA, err := topo.CreateNode(
 		ctx,
-		"peer-a",
+		"wg-peer-a",
 		lab.WithNetwork(netA, "172.28.10.10"),
 	)
 	if err != nil {
-		t.Fatalf("create peer-a node: %v", err)
+		t.Fatalf("create wg-peer-a node: %v", err)
 	}
 
 	peerB, err := topo.CreateNode(
 		ctx,
-		"peer-b",
+		"wg-peer-b",
 		lab.WithNetwork(netB, "172.28.20.10"),
 	)
 	if err != nil {
-		t.Fatalf("create peer-b node: %v", err)
+		t.Fatalf("create wg-peer-b node: %v", err)
 	}
 
-	// 4. Configure static underlay routes on peer-a and peer-b via the gateway
+	// 4. Configure static underlay routes on wg-peer-a and wg-peer-b via the gateway
 	if err := peerA.AddRoute(ctx, netB.Subnet, gateway.IPs[netA.Name]); err != nil {
-		t.Fatalf("add static route on peer-a: %v", err)
+		t.Fatalf("add static route on wg-peer-a: %v", err)
 	}
 	if err := peerB.AddRoute(ctx, netA.Subnet, gateway.IPs[netB.Name]); err != nil {
-		t.Fatalf("add static route on peer-b: %v", err)
+		t.Fatalf("add static route on wg-peer-b: %v", err)
 	}
 
 	// Verify underlay reachability across the gateway before bringing up WireGuard
 	if out, err := peerA.Ping(ctx, peerB.IPs[netB.Name], 2); err != nil {
-		t.Fatalf("underlay ping from peer-a to peer-b failed: %v\n%s", err, out)
+		t.Fatalf("underlay ping from wg-peer-a to wg-peer-b failed: %v\n%s", err, out)
 	}
 
 	// 5. Generate WireGuard key pairs and configure wg0 on both peers
 	keyA, err := lab.GenerateWGKeyPair()
 	if err != nil {
-		t.Fatalf("generate key pair for peer-a: %v", err)
+		t.Fatalf("generate key pair for wg-peer-a: %v", err)
 	}
 	keyB, err := lab.GenerateWGKeyPair()
 	if err != nil {
-		t.Fatalf("generate key pair for peer-b: %v", err)
+		t.Fatalf("generate key pair for wg-peer-b: %v", err)
 	}
 
 	err = peerA.SetupWireGuard(ctx, lab.WGInterfaceConfig{
@@ -116,7 +116,7 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("setup wireguard on peer-a: %v", err)
+		t.Fatalf("setup wireguard on wg-peer-a: %v", err)
 	}
 
 	err = peerB.SetupWireGuard(ctx, lab.WGInterfaceConfig{
@@ -133,10 +133,12 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("setup wireguard on peer-b: %v", err)
+		t.Fatalf("setup wireguard on wg-peer-b: %v", err)
 	}
 
-	// 6. Start pure-Go gopacket/pcapgo captures on the gateway (underlay UDP:51820) and peer-b (overlay wg0 ICMP)
+	//time.Sleep(time.Hour)
+
+	// 6. Start pure-Go gopacket/pcapgo captures on the gateway (underlay UDP:51820) and wg-peer-b (overlay wg0 ICMP)
 	gwCapture, err := gateway.StartCapture(
 		ctx,
 		lab.WithInterface("any"),
@@ -154,7 +156,7 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 		lab.WithSaveOnFailure("artifacts/pcap"),
 	)
 	if err != nil {
-		t.Fatalf("start peer-b wg0 packet capture: %v", err)
+		t.Fatalf("start wg-peer-b wg0 packet capture: %v", err)
 	}
 
 	// 7. Send traffic over the WireGuard tunnel (10.100.0.1 -> 10.100.0.2)
@@ -169,7 +171,7 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 		t.Fatalf("stop gateway packet capture: %v", err)
 	}
 	if err := wgCapture.Stop(ctx); err != nil {
-		t.Fatalf("stop peer-b wg0 packet capture: %v", err)
+		t.Fatalf("stop wg-peer-b wg0 packet capture: %v", err)
 	}
 
 	gwPackets, err := gwCapture.Packets(ctx)
@@ -203,10 +205,10 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 
 	wgPackets, err := wgCapture.Packets(ctx)
 	if err != nil {
-		t.Fatalf("decode peer-b wg0 captured packets: %v", err)
+		t.Fatalf("decode wg-peer-b wg0 captured packets: %v", err)
 	}
 	wgSummary, _ := wgCapture.DumpText(ctx)
-	t.Logf("peer-b wg0 captured %d decrypted ICMPv4 packets (gopacket):\n%s", len(wgPackets), wgSummary)
+	t.Logf("wg-peer-b wg0 captured %d decrypted ICMPv4 packets (gopacket):\n%s", len(wgPackets), wgSummary)
 
 	var echoRequests, echoReplies int
 	for _, pkt := range wgPackets {
@@ -241,12 +243,12 @@ func TestWireGuardPeersViaSuricata(t *testing.T) {
 		t.Fatalf("expected exported pcap file > 24 bytes (pcap global header), got info=%v err=%v", info, err)
 	}
 
-	// 9. Verify wireguard-go UAPI handshake and transfer stats on peer-a (without wg-tools)
+	// 9. Verify wireguard-go UAPI handshake and transfer stats on wg-peer-a (without wg-tools)
 	wgStatus, err := peerA.WireGuardStatus(ctx, "wg0")
 	if err != nil {
-		t.Fatalf("inspect wireguard-go UAPI status on peer-a: %v", err)
+		t.Fatalf("inspect wireguard-go UAPI status on wg-peer-a: %v", err)
 	}
-	t.Logf("peer-a wg0 UAPI status:\n%s", wgStatus)
+	t.Logf("wg-peer-a wg0 UAPI status:\n%s", wgStatus)
 	if !strings.Contains(wgStatus, "last_handshake_time_sec=") || strings.Contains(wgStatus, "last_handshake_time_sec=0") {
 		t.Fatalf("expected non-zero last_handshake_time_sec in UAPI status, got:\n%s", wgStatus)
 	}
