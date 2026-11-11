@@ -5,11 +5,17 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	tcnetwork "github.com/testcontainers/testcontainers-go/network"
@@ -19,13 +25,29 @@ const (
 	// DefaultImage is the default container image used for lab nodes.
 	// Neither wireguard-tools nor tcpdump are required inside the image.
 	DefaultImage = "alpine:latest"
+
+	// LabelManagedBy identifies Docker resources (containers and networks) managed by netlab.
+	LabelManagedBy = "org.netlab.managed"
+
+	// LabelTestName identifies the Go test name that created a Docker resource.
+	LabelTestName = "org.netlab.test"
+
+	// LabelNetworkName identifies the logical network name inside a Lab.
+	LabelNetworkName = "org.netlab.network"
+
+	// LabelNodeName identifies the logical node name inside a Lab.
+	LabelNodeName = "org.netlab.node"
 )
 
 // Lab manages the lifecycle of networks and container nodes for a single Go test.
 type Lab struct {
-	t        testing.TB
-	networks map[string]*Network
-	nodes    map[string]*Node
+	t           testing.TB
+	mu          sync.Mutex
+	networks    map[string]*Network
+	nodes       map[string]*Node
+	cleanups    []func(context.Context)
+	cleanupOnce sync.Once
+	sigStop     func()
 }
 
 // Network represents an isolated Docker bridge network with a dedicated IPv4 subnet.
@@ -90,18 +112,195 @@ func WithIPForwarding() NodeOption {
 // Node represents a running container participating in a networking scenario.
 type Node struct {
 	t         testing.TB
+	lab       *Lab
 	Name      string
 	Container testcontainers.Container
 	IPs       map[string]string // keyed by Network.Name
 }
 
 // New creates a new Lab tied to the lifecycle of t.
+// It removes any stale netlab resources from previous failed or interrupted test runs,
+// registers t.Cleanup, and traps SIGINT/SIGTERM so interrupted tests clean up after themselves.
 func New(t testing.TB) *Lab {
 	t.Helper()
-	return &Lab{
+	l := &Lab{
 		t:        t,
 		networks: make(map[string]*Network),
 		nodes:    make(map[string]*Node),
+	}
+
+	// Best-effort sweep of stale containers/networks left by previously crashed/killed runs.
+	sweepCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	_ = CleanupStaleResources(sweepCtx)
+	cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	doneCh := make(chan struct{})
+	l.sigStop = func() {
+		signal.Stop(sigCh)
+		close(doneCh)
+	}
+
+	go func() {
+		select {
+		case <-sigCh:
+			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = l.Cleanup(cleanCtx)
+			cleanCancel()
+			os.Exit(130)
+		case <-doneCh:
+		}
+	}()
+
+	t.Cleanup(func() {
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanCancel()
+		_ = l.Cleanup(cleanCtx)
+	})
+
+	return l
+}
+
+// OnCleanup registers a callback to be invoked in LIFO order before containers are terminated during Lab.Cleanup.
+func (l *Lab) OnCleanup(fn func(context.Context)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cleanups = append(l.cleanups, fn)
+}
+
+// Cleanup tears down all container nodes and bridge networks created by this Lab.
+// It is idempotent and safe to call via defer topo.Cleanup(context.Background()), t.Cleanup, or signal handlers.
+func (l *Lab) Cleanup(ctx context.Context) error {
+	var firstErr error
+	l.cleanupOnce.Do(func() {
+		if l.sigStop != nil {
+			l.sigStop()
+		}
+
+		l.mu.Lock()
+		cleanups := make([]func(context.Context), len(l.cleanups))
+		copy(cleanups, l.cleanups)
+		l.cleanups = nil
+
+		nodes := make([]*Node, 0, len(l.nodes))
+		for _, n := range l.nodes {
+			nodes = append(nodes, n)
+		}
+		networks := make([]*Network, 0, len(l.networks))
+		for _, net := range l.networks {
+			networks = append(networks, net)
+		}
+		l.nodes = make(map[string]*Node)
+		l.networks = make(map[string]*Network)
+		l.mu.Unlock()
+
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i](ctx)
+		}
+
+		for _, n := range nodes {
+			if n.Container != nil {
+				if err := testcontainers.TerminateContainer(n.Container); err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		for _, net := range networks {
+			if net.DockerNet != nil {
+				if err := net.DockerNet.Remove(ctx); err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+	})
+	return firstErr
+}
+
+// CleanupStaleResources removes any leftover Docker containers and networks labeled with LabelManagedBy ("org.netlab.managed=true").
+func CleanupStaleResources(ctx context.Context) error {
+	cli, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+
+	f := make(client.Filters).Add("label", LabelManagedBy+"=true")
+
+	ctrs, err := cli.ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: f,
+	})
+	if err == nil {
+		for _, c := range ctrs.Items {
+			_, _ = cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{
+				Force:         true,
+				RemoveVolumes: true,
+			})
+		}
+	}
+
+	nets, err := cli.NetworkList(ctx, client.NetworkListOptions{
+		Filters: f,
+	})
+	if err == nil {
+		for _, nw := range nets.Items {
+			_, _ = cli.NetworkRemove(ctx, nw.ID, client.NetworkRemoveOptions{})
+		}
+	}
+	return nil
+}
+
+func removeContainerIfExists(ctx context.Context, name string) {
+	cli, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return
+	}
+	defer cli.Close()
+
+	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{
+		Force:         true,
+		RemoveVolumes: true,
+	})
+}
+
+func removeOverlappingNetworks(ctx context.Context, prefix netip.Prefix) {
+	cli, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return
+	}
+	defer cli.Close()
+
+	nets, err := cli.NetworkList(ctx, client.NetworkListOptions{})
+	if err != nil {
+		return
+	}
+
+	for _, nw := range nets.Items {
+		if nw.Name == "bridge" || nw.Name == "host" || nw.Name == "none" {
+			continue
+		}
+		overlaps := false
+		for _, cfg := range nw.IPAM.Config {
+			if cfg.Subnet.IsValid() && cfg.Subnet.Overlaps(prefix) {
+				overlaps = true
+				break
+			}
+		}
+		if !overlaps {
+			continue
+		}
+
+		// Disconnect and remove any containers still attached to the conflicting network
+		if inspected, err := cli.NetworkInspect(ctx, nw.ID, client.NetworkInspectOptions{}); err == nil {
+			for cid := range inspected.Network.Containers {
+				_, _ = cli.ContainerRemove(ctx, cid, client.ContainerRemoveOptions{
+					Force:         true,
+					RemoveVolumes: true,
+				})
+			}
+		}
+		_, _ = cli.NetworkRemove(ctx, nw.ID, client.NetworkRemoveOptions{})
 	}
 }
 
@@ -119,9 +318,20 @@ func (l *Lab) CreateNetwork(ctx context.Context, name, subnet, hostBridgeIP stri
 		return nil, fmt.Errorf("parse gateway IP %q for network %s: %w", hostBridgeIP, name, err)
 	}
 
+	removeOverlappingNetworks(ctx, prefix)
+
+	labels := map[string]string{
+		LabelManagedBy:   "true",
+		LabelNetworkName: name,
+	}
+	if l.t != nil {
+		labels[LabelTestName] = l.t.Name()
+	}
+
 	dockerNet, err := tcnetwork.New(
 		ctx,
 		tcnetwork.WithDriver("bridge"),
+		tcnetwork.WithLabels(labels),
 		tcnetwork.WithIPAM(&network.IPAM{
 			Driver: "default",
 			Config: []network.IPAMConfig{
@@ -136,15 +346,15 @@ func (l *Lab) CreateNetwork(ctx context.Context, name, subnet, hostBridgeIP stri
 		return nil, fmt.Errorf("create network %s (%s): %w", name, subnet, err)
 	}
 
-	testcontainers.CleanupNetwork(l.t, dockerNet)
-
 	net := &Network{
 		Name:       name,
 		Subnet:     subnet,
 		HostBridge: hostBridgeIP,
 		DockerNet:  dockerNet,
 	}
+	l.mu.Lock()
 	l.networks[name] = net
+	l.mu.Unlock()
 	return net, nil
 }
 
@@ -175,10 +385,21 @@ func (l *Lab) CreateNode(ctx context.Context, name string, opts ...NodeOption) (
 		parsedAddrs[att.Network.DockerNet.Name] = addr
 	}
 
+	removeContainerIfExists(ctx, name)
+
+	labels := map[string]string{
+		LabelManagedBy: "true",
+		LabelNodeName:  name,
+	}
+	if l.t != nil {
+		labels[LabelTestName] = l.t.Name()
+	}
+
 	req := testcontainers.ContainerRequest{
-		Name:  name,
-		Image: cfg.image,
-		Cmd:   cfg.cmd,
+		Name:   name,
+		Image:  cfg.image,
+		Cmd:    cfg.cmd,
+		Labels: labels,
 		ConfigModifier: func(cc *container.Config) {
 			cc.Hostname = name
 		},
@@ -211,18 +432,23 @@ func (l *Lab) CreateNode(ctx context.Context, name string, opts ...NodeOption) (
 		ContainerRequest: req,
 		Started:          true,
 	})
-	testcontainers.CleanupContainer(l.t, ctr)
 	if err != nil {
+		if ctr != nil {
+			_ = testcontainers.TerminateContainer(ctr)
+		}
 		return nil, fmt.Errorf("start node %s: %w", name, err)
 	}
 
 	node := &Node{
 		t:         l.t,
+		lab:       l,
 		Name:      name,
 		Container: ctr,
 		IPs:       ips,
 	}
+	l.mu.Lock()
 	l.nodes[name] = node
+	l.mu.Unlock()
 	return node, nil
 }
 

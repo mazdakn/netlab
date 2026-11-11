@@ -25,6 +25,7 @@ func TestTailscaleTailnetViaGateway(t *testing.T) {
 	defer cancel()
 
 	topo := lab.New(t)
+	defer topo.Cleanup(context.Background())
 
 	// 1. Create two isolated underlay networks
 	netA, err := topo.CreateNetwork(ctx, "net-a", "172.28.10.0/24", "172.28.10.1")

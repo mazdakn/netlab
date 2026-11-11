@@ -177,7 +177,11 @@ func (n *Node) StartSuricata(ctx context.Context, opts ...SuricataOption) (*Suri
 		rulesFile: rulesFile,
 	}
 
-	if n.t != nil {
+	if n.lab != nil {
+		n.lab.OnCleanup(func(cleanupCtx context.Context) {
+			_ = s.Stop(cleanupCtx)
+		})
+	} else if n.t != nil {
 		n.t.Cleanup(func() {
 			_ = s.Stop(context.Background())
 		})

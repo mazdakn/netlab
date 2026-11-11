@@ -206,22 +206,33 @@ func (n *Node) StartCapture(ctx context.Context, opts ...CaptureOption) (*Packet
 		logFile:       logPath,
 	}
 
-	if n.t != nil {
+	saveCapture := func(cleanupCtx context.Context) {
+		_ = cap.Stop(cleanupCtx)
+
+		if cfg.saveAlways || (cfg.saveOnFailure && n.t != nil && n.t.Failed()) {
+			testName := "capture"
+			if n.t != nil {
+				testName = n.t.Name()
+			}
+			fileName := fmt.Sprintf("%s-%s-%s-%d.pcap",
+				sanitizeName(testName), sanitizeName(n.Name), sanitizeName(cfg.iface), id)
+			destPath := filepath.Join(cfg.saveDir, fileName)
+			if err := cap.SaveToFile(cleanupCtx, destPath); err != nil {
+				if n.t != nil {
+					n.t.Logf("warning: failed to save pcap for %s: %v", n.Name, err)
+				}
+			} else if n.t != nil {
+				n.t.Logf("saved packet capture to %s", destPath)
+			}
+		}
+	}
+
+	if n.lab != nil {
+		n.lab.OnCleanup(saveCapture)
+	} else if n.t != nil {
 		// Because t.Cleanup runs LIFO, this cleanup runs BEFORE CreateNode's container termination.
 		n.t.Cleanup(func() {
-			cleanupCtx := context.Background()
-			_ = cap.Stop(cleanupCtx)
-
-			if cfg.saveAlways || (cfg.saveOnFailure && n.t.Failed()) {
-				fileName := fmt.Sprintf("%s-%s-%s-%d.pcap",
-					sanitizeName(n.t.Name()), sanitizeName(n.Name), sanitizeName(cfg.iface), id)
-				destPath := filepath.Join(cfg.saveDir, fileName)
-				if err := cap.SaveToFile(cleanupCtx, destPath); err != nil {
-					n.t.Logf("warning: failed to save pcap for %s: %v", n.Name, err)
-				} else {
-					n.t.Logf("saved packet capture to %s", destPath)
-				}
-			}
+			saveCapture(context.Background())
 		})
 	}
 

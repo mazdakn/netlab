@@ -159,7 +159,11 @@ func (n *Node) StartHeadscale(ctx context.Context, opts ...HeadscaleOption) (*He
 		logFile:    logFile,
 	}
 
-	if n.t != nil {
+	if n.lab != nil {
+		n.lab.OnCleanup(func(cleanupCtx context.Context) {
+			_ = hs.Stop(cleanupCtx)
+		})
+	} else if n.t != nil {
 		n.t.Cleanup(func() {
 			_ = hs.Stop(context.Background())
 		})
@@ -521,7 +525,11 @@ func (n *Node) StartTailscale(ctx context.Context, opts ...TailscaleOption) (*Ta
 		logFile:    logFile,
 	}
 
-	if n.t != nil {
+	if n.lab != nil {
+		n.lab.OnCleanup(func(cleanupCtx context.Context) {
+			_ = ts.Stop(cleanupCtx)
+		})
+	} else if n.t != nil {
 		n.t.Cleanup(func() {
 			_ = ts.Stop(context.Background())
 		})
